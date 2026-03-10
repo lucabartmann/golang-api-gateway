@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"golang-api-gateway/internal/config"
-	"golang-api-gateway/pkg/logger"
+	"github.com/qrowned/golang-api-gateway/internal/config"
+	"github.com/qrowned/golang-api-gateway/pkg/logger"
 )
 
 // Middleware enforces the given rate limit profile, returning 429 with Retry-After on exceeded limits.

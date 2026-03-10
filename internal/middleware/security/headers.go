@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"golang-api-gateway/internal/config"
+	"github.com/qrowned/golang-api-gateway/internal/config"
 )
 
 // HeadersMiddleware sets security-related HTTP response headers on every response.

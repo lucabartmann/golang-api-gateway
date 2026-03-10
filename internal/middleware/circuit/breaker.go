@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/qrowned/golang-api-gateway/internal/config"
 	"github.com/sony/gobreaker"
-	"golang-api-gateway/internal/config"
 )
 
 // Manager holds per-upstream circuit breakers and implements BreakerProvider.

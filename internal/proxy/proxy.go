@@ -8,8 +8,8 @@ import (
 	"net/http"
 	"net/http/httputil"
 
+	"github.com/qrowned/golang-api-gateway/pkg/logger"
 	"github.com/sony/gobreaker"
-	"golang-api-gateway/pkg/logger"
 )
 
 type upstreamKey struct{}

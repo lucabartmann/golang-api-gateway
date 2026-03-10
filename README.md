@@ -77,7 +77,7 @@ Internet ──────────────▶│  [1] Recovery         
 ## Project Structure
 
 ```
-golang-api-gateway/
+github.com/qrowned/golang-api-gateway/
 ├── cmd/
 │   └── gateway/
 │       └── main.go                  # entry point, dependency wiring
@@ -434,13 +434,19 @@ pkg/gateway/
 
 ### Installation
 
-The package lives inside this module, so upstream services in the same repository import it directly:
+**Same repository:**
 
 ```go
-import "golang-api-gateway/pkg/gateway"
+import "github.com/qrowned/golang-api-gateway/pkg/gateway"
 ```
 
-For services in separate repositories, copy the three files into your own `pkg/gateway/` directory — the package has no external dependencies beyond the Go standard library.
+**Separate repository:**
+
+```bash
+go get github.com/qrowned/golang-api-gateway/pkg/gateway@latest
+```
+
+The package has no external dependencies beyond the Go standard library.
 
 ### Router wiring
 

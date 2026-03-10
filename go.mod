@@ -1,4 +1,4 @@
-module golang-api-gateway
+module github.com/qrowned/golang-api-gateway
 
 go 1.25
 

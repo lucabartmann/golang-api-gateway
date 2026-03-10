@@ -5,16 +5,16 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/qrowned/golang-api-gateway/internal/config"
+	"github.com/qrowned/golang-api-gateway/internal/gateway"
+	"github.com/qrowned/golang-api-gateway/internal/health"
+	authmw "github.com/qrowned/golang-api-gateway/internal/middleware/auth"
+	"github.com/qrowned/golang-api-gateway/internal/middleware/circuit"
+	ratelimitmw "github.com/qrowned/golang-api-gateway/internal/middleware/ratelimit"
+	"github.com/qrowned/golang-api-gateway/internal/proxy"
+	"github.com/qrowned/golang-api-gateway/internal/router"
+	"github.com/qrowned/golang-api-gateway/pkg/logger"
 	"github.com/redis/go-redis/v9"
-	"golang-api-gateway/internal/config"
-	"golang-api-gateway/internal/gateway"
-	"golang-api-gateway/internal/health"
-	authmw "golang-api-gateway/internal/middleware/auth"
-	"golang-api-gateway/internal/middleware/circuit"
-	ratelimitmw "golang-api-gateway/internal/middleware/ratelimit"
-	"golang-api-gateway/internal/proxy"
-	"golang-api-gateway/internal/router"
-	"golang-api-gateway/pkg/logger"
 )
 
 func main() {

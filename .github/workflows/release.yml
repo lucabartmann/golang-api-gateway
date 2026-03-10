@@ -1,0 +1,79 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+# Prevent concurrent releases running at the same time
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Tag & Publish
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write   # create tags + GitHub Releases
+      packages: write   # publish to GitHub Packages (GHCR / Go module proxy)
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0  # full history needed to read existing tags
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # ── Verify the build is clean before tagging ──────────────────────────
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race ./...
+
+      # ── Determine the next semantic version ───────────────────────────────
+      # Reads the latest vX.Y.Z tag and increments the patch number.
+      # For a major or minor bump, push a tag manually:
+      #   git tag v2.0.0 && git push origin v2.0.0
+      - name: Compute next version
+        id: version
+        run: |
+          LATEST=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -1)
+          if [ -z "$LATEST" ]; then
+            NEXT="v0.1.0"
+          else
+            MAJOR=$(echo "$LATEST" | cut -d. -f1 | tr -d v)
+            MINOR=$(echo "$LATEST" | cut -d. -f2)
+            PATCH=$(echo "$LATEST" | cut -d. -f3)
+            NEXT="v${MAJOR}.${MINOR}.$((PATCH + 1))"
+          fi
+          echo "version=$NEXT" >> "$GITHUB_OUTPUT"
+          echo "previous=$LATEST" >> "$GITHUB_OUTPUT"
+          echo "Tagging $NEXT (previous: ${LATEST:-none})"
+
+      # ── Create and push the version tag ───────────────────────────────────
+      - name: Create tag
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag "${{ steps.version.outputs.version }}"
+          git push origin "${{ steps.version.outputs.version }}"
+
+      # ── Create a GitHub Release with auto-generated release notes ─────────
+      # The release makes the module version visible on pkg.go.dev and
+      # importable via:
+      #   go get github.com/qrowned/golang-api-gateway/pkg/gateway@VERSION
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.version }}
+          name: ${{ steps.version.outputs.version }}
+          generate_release_notes: true
+          make_latest: true
