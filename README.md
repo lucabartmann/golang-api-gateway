@@ -17,10 +17,16 @@ A production-grade, modular API gateway written in Go. Designed for Kubernetes w
 - [Rate Limiting](#rate-limiting)
 - [Authentication](#authentication)
 - [Upstream Services](#upstream-services)
+  - [Client Library](#client-library)
+  - [Installation](#installation)
+  - [Router wiring](#router-wiring)
+  - [HTTP handlers](#http-handlers)
+  - [Service layer](#service-layer)
+  - [Log correlation](#log-correlation)
+  - [Trust boundary](#trust-boundary)
 - [Health Probes](#health-probes)
 - [Security](#security)
 - [Kubernetes Deployment](#kubernetes-deployment)
-- [Consuming Gateway Headers in Upstream Services](#consuming-gateway-headers-in-upstream-services)
 
 ---
 
@@ -106,6 +112,10 @@ golang-api-gateway/
 │   └── health/
 │       └── handler.go               # /healthz + /readyz
 ├── pkg/
+│   ├── gateway/
+│   │   ├── identity.go              # Identity struct, FromContext, MustFromContext, sentinel errors
+│   │   ├── middleware.go            # Middleware (header extraction), Require, RequireAuthenticated
+│   │   └── helpers.go              # UserID(ctx), RequestID(ctx), CheckScope(ctx, scope)
 │   └── logger/
 │       └── logger.go                # slog JSON logger, FromContext/WithContext
 ├── config/
@@ -403,42 +413,177 @@ curl -X POST "https://your-tenant.auth0.com/oauth/token" \
 
 ## Upstream Services
 
-After the gateway validates a request, upstream services receive the identity via headers and can use them directly without re-validating the JWT.
+After the gateway validates a request it forwards the caller's identity to upstreams via HTTP headers. Upstream services should never re-validate the JWT — instead they consume these headers through the provided client library.
 
-### Recommended pattern
+| Header forwarded by gateway | Content |
+|---|---|
+| `X-User-ID` | JWT `sub` claim (e.g. `auth0\|64a1b2c3`) |
+| `X-User-Scopes` | Space-separated OAuth2 scopes (e.g. `read:orders write:orders`) |
+| `X-Request-Id` | Unique request ID for cross-service log correlation |
 
-```go
-// internal/gateway/context.go — in each upstream service
-type Identity struct {
-    UserID    string
-    Scopes    []string
-    RequestID string
-}
+### Client Library
 
-func Middleware(next http.Handler) http.Handler {
-    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        id := &Identity{
-            UserID:    r.Header.Get("X-User-ID"),
-            Scopes:    strings.Fields(r.Header.Get("X-User-Scopes")),
-            RequestID: r.Header.Get("X-Request-Id"),
-        }
-        ctx := context.WithValue(r.Context(), contextKey{}, id)
-        next.ServeHTTP(w, r.WithContext(ctx))
-    })
-}
+The `pkg/gateway` package is a zero-dependency client library that upstream services import to consume these headers through a typed API. It handles header extraction, context propagation, scope enforcement, and service-layer authorization checks.
 
-// Scope enforcement middleware
-func Require(scopes ...string) func(http.Handler) http.Handler { ... }
+```
+pkg/gateway/
+├── identity.go    # Identity struct, FromContext, MustFromContext, sentinel errors
+├── middleware.go  # HTTP middleware: Middleware, Require, RequireAuthenticated
+└── helpers.go     # One-liner helpers: UserID, RequestID, CheckScope
 ```
 
-Usage in the upstream router:
+### Installation
+
+The package lives inside this module, so upstream services in the same repository import it directly:
 
 ```go
+import "golang-api-gateway/pkg/gateway"
+```
+
+For services in separate repositories, copy the three files into your own `pkg/gateway/` directory — the package has no external dependencies beyond the Go standard library.
+
+### Router wiring
+
+Add `gateway.Middleware` as the first middleware in your router. It extracts the three gateway headers into the request context once so all downstream handlers and service-layer code can read them without touching `http.Request`.
+
+```go
+r := chi.NewRouter()
+
+// Always first — populates context for all handlers below
 r.Use(gateway.Middleware)
-r.With(gateway.Require("write:orders")).Post("/orders", createOrder)
+
+// No scope check — any authenticated or unauthenticated request passes
+r.Get("/healthz", healthHandler)
+
+// Requires a logged-in user (non-empty X-User-ID), no specific scope
+r.With(gateway.RequireAuthenticated()).Get("/profile", getProfile)
+
+// Requires one specific scope
+r.With(gateway.Require("read:orders")).Get("/orders", listOrders)
+
+// Requires multiple scopes — all must be present
+r.With(gateway.Require("read:orders", "write:orders")).Put("/orders/{id}", updateOrder)
 ```
 
-> **Trust boundary:** Upstream services must only be reachable from within the cluster. Use a Kubernetes `NetworkPolicy` to restrict ingress to the gateway pod only. Otherwise `X-User-ID` can be forged by any caller.
+`Require` responds automatically:
+- `401 {"error":"unauthenticated"}` — `X-User-ID` is absent (public route, or gateway auth disabled)
+- `403 {"error":"missing scope: write:orders"}` — user is authenticated but lacks the scope
+
+### HTTP handlers
+
+Two ways to read the identity inside a handler:
+
+```go
+// Safe form — use when the route may be unauthenticated
+func listOrders(w http.ResponseWriter, r *http.Request) {
+    id, ok := gateway.FromContext(r.Context())
+    if !ok || !id.IsAuthenticated() {
+        http.Error(w, "unauthorized", http.StatusUnauthorized)
+        return
+    }
+    log.Printf("[%s] listing orders for user %s", id.RequestID, id.UserID)
+    // ...
+}
+
+// Panic form — use only in handlers already guarded by Require or RequireAuthenticated
+func getProfile(w http.ResponseWriter, r *http.Request) {
+    id := gateway.MustFromContext(r.Context()) // panics if Middleware not installed
+    fmt.Fprintf(w, "hello %s, you have scopes: %v", id.UserID, id.Scopes)
+}
+
+// Manual scope check inside a handler (alternative to Require middleware)
+func deleteUser(w http.ResponseWriter, r *http.Request) {
+    id := gateway.MustFromContext(r.Context())
+    if !id.HasScope("delete:users") {
+        http.Error(w, "forbidden", http.StatusForbidden)
+        return
+    }
+    // ...
+}
+```
+
+### Service layer
+
+Service-layer code that cannot depend on `http.Handler` uses `CheckScope` and the one-liner helpers. The context is passed through from the handler, so no HTTP types are needed:
+
+```go
+func (s *OrderService) Cancel(ctx context.Context, orderID string) error {
+    // Returns gateway.ErrUnauthenticated or gateway.ErrForbidden
+    if err := gateway.CheckScope(ctx, "write:orders"); err != nil {
+        return err
+    }
+    return s.db.CancelOrder(ctx, orderID, gateway.UserID(ctx))
+}
+
+func (s *OrderService) Get(ctx context.Context, orderID string) (*Order, error) {
+    order, err := s.db.GetOrder(ctx, orderID)
+    if err != nil {
+        return nil, err
+    }
+    // Restrict to owner unless the caller has admin scope
+    if order.OwnerID != gateway.UserID(ctx) {
+        if err := gateway.CheckScope(ctx, "admin:orders"); err != nil {
+            return nil, gateway.ErrForbidden
+        }
+    }
+    return order, nil
+}
+```
+
+Mapping the sentinel errors to HTTP responses at the handler boundary:
+
+```go
+order, err := orderService.Get(r.Context(), orderID)
+if errors.Is(err, gateway.ErrUnauthenticated) {
+    http.Error(w, "unauthorized", http.StatusUnauthorized)
+    return
+}
+if errors.Is(err, gateway.ErrForbidden) {
+    http.Error(w, "forbidden", http.StatusForbidden)
+    return
+}
+```
+
+### Log correlation
+
+Propagate `X-Request-Id` into every log line so requests can be traced across the gateway and all upstream services in any log aggregator:
+
+```go
+func loggingMiddleware(log *slog.Logger) func(http.Handler) http.Handler {
+    return func(next http.Handler) http.Handler {
+        return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+            reqLog := log.With(
+                "request_id", gateway.RequestID(r.Context()),
+                "user_id",    gateway.UserID(r.Context()),
+            )
+            // store reqLog in context for use in service layer
+            next.ServeHTTP(w, r)
+        })
+    }
+}
+```
+
+### Trust boundary
+
+> **Important:** `X-User-ID` and `X-User-Scopes` are plain HTTP headers. Any caller with direct network access to an upstream service can forge them. Upstream services must be reachable **only through the gateway**.
+
+Enforce this with a Kubernetes `NetworkPolicy`:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: orders-service-ingress
+spec:
+  podSelector:
+    matchLabels:
+      app: orders-service
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: api-gateway
+```
 
 ---
 
