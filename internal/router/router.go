@@ -3,6 +3,7 @@ package router
 import (
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	chimw "github.com/go-chi/chi/v5/middleware"
@@ -86,6 +87,11 @@ func New(opts Options) (http.Handler, error) {
 		for _, method := range methods {
 			method := method
 			r.Method(method, route.Path, chain(handler, routeMiddlewares...))
+			// Also register the bare base path so e.g. /api/v1/users matches
+			// in addition to /api/v1/users/* (chi wildcards require ≥1 char).
+			if basePath := strings.TrimSuffix(route.Path, "/*"); basePath != route.Path {
+				r.Method(method, basePath, chain(handler, routeMiddlewares...))
+			}
 		}
 	}
 

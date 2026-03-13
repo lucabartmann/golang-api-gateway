@@ -130,7 +130,7 @@ func (m *Middleware) Handler(next http.Handler) http.Handler {
 
 		// Forward identity headers to upstreams
 		r = r.WithContext(ctx)
-		log.Info("User id is " + claims.Subject)
+		log.Debug("auth: request authenticated", "subject", claims.Subject, "scopes", claims.Scopes)
 		r.Header.Set("X-User-ID", claims.Subject)
 		r.Header.Set("X-User-Scopes", strings.Join(claims.Scopes, " "))
 

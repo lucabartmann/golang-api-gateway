@@ -42,7 +42,8 @@ routes:
 
 auth:
   domain: "your-tenant.auth0.com"        # Auth0 tenant domain (no https://)
-  audience: "https://api.your-domain.com"
+  audience: "https://api.your-domain.com" # identifier of the API created in Auth0 dashboard
+                                           # must NOT be the Management API URL (/api/v2/)
   jwks_refresh_interval: 15m             # background JWKS key refresh interval
 
 rate_limit:
