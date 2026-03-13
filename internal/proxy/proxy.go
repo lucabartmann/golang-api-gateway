@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 
+	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/qrowned/golang-api-gateway/pkg/logger"
 	"github.com/sony/gobreaker"
 )
@@ -97,6 +98,10 @@ func (rp *ReverseProxy) director(req *http.Request) {
 	req.Host = target.Host
 	if _, ok := req.Header["User-Agent"]; !ok {
 		req.Header.Set("User-Agent", "golang-api-gateway/1.0")
+	}
+	// Forward the request ID so upstreams can correlate logs across services.
+	if reqID := chimw.GetReqID(req.Context()); reqID != "" {
+		req.Header.Set("X-Request-Id", reqID)
 	}
 }
 
