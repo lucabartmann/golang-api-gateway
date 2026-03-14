@@ -151,26 +151,45 @@ func extractBearer(r *http.Request) (string, error) {
 }
 
 func extractScopes(token jwt.Token) []string {
-	raw, ok := token.Get("scope")
-	if !ok {
-		return nil
-	}
-	switch v := raw.(type) {
-	case string:
-		if v == "" {
-			return nil
+	seen := make(map[string]struct{})
+	var result []string
+
+	add := func(s string) {
+		if _, ok := seen[s]; !ok {
+			seen[s] = struct{}{}
+			result = append(result, s)
 		}
-		return strings.Fields(v)
-	case []interface{}:
-		scopes := make([]string, 0, len(v))
-		for _, s := range v {
-			if str, ok := s.(string); ok {
-				scopes = append(scopes, str)
+	}
+
+	// scope claim: space-separated string (standard OAuth2)
+	if raw, ok := token.Get("scope"); ok {
+		switch v := raw.(type) {
+		case string:
+			for _, s := range strings.Fields(v) {
+				add(s)
+			}
+		case []interface{}:
+			for _, s := range v {
+				if str, ok := s.(string); ok {
+					add(str)
+				}
 			}
 		}
-		return scopes
 	}
-	return nil
+
+	// permissions claim: Auth0 RBAC puts role-based permissions here,
+	// not in scope. Merge so upstream scope enforcement works uniformly.
+	if raw, ok := token.Get("permissions"); ok {
+		if perms, ok := raw.([]interface{}); ok {
+			for _, p := range perms {
+				if str, ok := p.(string); ok {
+					add(str)
+				}
+			}
+		}
+	}
+
+	return result
 }
 
 func writeAuthError(w http.ResponseWriter, msg string) {
